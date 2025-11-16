@@ -1,0 +1,263 @@
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.util.*;
+import java.util.regex.Pattern;
+import java.text.DecimalFormat;
+import java.io.*;
+import java.security.MessageDigest;
+import java.util.Base64;
+import java.nio.file.*;
+import java.util.List;
+
+public class kushan extends JFrame {
+
+    private JTextField studentNameField, srnField, courseNameField, creditsField, gradeField;
+    private JComboBox<String> studentSelector;
+    private JTable courseTable;
+    private DefaultTableModel tableModel;
+    private DefaultListModel<String> fileListModel;
+
+    private Map<String, Student> studentCourses = new HashMap<>();
+    private static final Map<String, Double> GRADE_POINTS = new HashMap<>();
+    private static final Pattern NAME_PATTERN = Pattern.compile("^[a-zA-Z\\s]+$");
+    private static final Pattern SRN_PATTERN = Pattern.compile("^[a-zA-Z0-9]+$");
+    private static final DecimalFormat GPA_FORMAT = new DecimalFormat("#.00");
+
+    static {
+        GRADE_POINTS.put("O", 10.0);
+        GRADE_POINTS.put("A+", 9.0);
+        GRADE_POINTS.put("A", 8.0);
+        GRADE_POINTS.put("B+", 7.0);
+        GRADE_POINTS.put("B", 6.0);
+        GRADE_POINTS.put("C", 5.0);
+        GRADE_POINTS.put("P", 4.0);
+        GRADE_POINTS.put("F", 0.0);
+    }
+
+    public kushan() {
+        super("GPA Calculator - Multi Student Edition");
+        setLayout(new BorderLayout(10, 10));
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setSize(900, 650);
+
+        JPanel topPanel = new JPanel(new BorderLayout());
+        topPanel.setBorder(BorderFactory.createTitledBorder("Student Management"));
+
+        JPanel studentPanel = new JPanel(new GridLayout(3, 2, 10, 10));
+        studentPanel.add(new JLabel("Enter Student Name:"));
+        studentNameField = new JTextField();
+        studentPanel.add(studentNameField);
+
+        studentPanel.add(new JLabel("Enter SRN:"));
+        srnField = new JTextField();
+        studentPanel.add(srnField);
+
+        studentPanel.add(new JLabel("Select Student:"));
+        studentSelector = new JComboBox<>();
+        studentSelector.addItem("None");
+        studentSelector.addActionListener(e -> updateTable());
+        studentPanel.add(studentSelector);
+
+        JButton addStudentButton = new JButton("Add Student");
+        addStudentButton.addActionListener(e -> addStudent());
+
+        topPanel.add(studentPanel, BorderLayout.CENTER);
+        topPanel.add(addStudentButton, BorderLayout.EAST);
+        add(topPanel, BorderLayout.NORTH);
+
+        JPanel centerPanel = new JPanel(new BorderLayout(10, 10));
+        centerPanel.setBorder(BorderFactory.createTitledBorder("Course Details"));
+
+        JPanel inputPanel = new JPanel(new GridLayout(4, 2, 10, 10));
+        inputPanel.add(new JLabel("Course Name:"));
+        courseNameField = new JTextField();
+        inputPanel.add(courseNameField);
+
+        inputPanel.add(new JLabel("Credits:"));
+        creditsField = new JTextField();
+        inputPanel.add(creditsField);
+
+        inputPanel.add(new JLabel("Grade (O, A+, A, B+, B, C, P, F):"));
+        gradeField = new JTextField();
+        inputPanel.add(gradeField);
+
+        JButton addCourseButton = new JButton("Add Course");
+        addCourseButton.addActionListener(e -> addCourse());
+        inputPanel.add(addCourseButton);
+
+        JButton clearCoursesButton = new JButton("Clear Courses");
+        clearCoursesButton.addActionListener(e -> clearCourses());
+        inputPanel.add(clearCoursesButton);
+
+        centerPanel.add(inputPanel, BorderLayout.NORTH);
+
+        String[] columns = {"Student Name", "Course Name", "Credits", "Grade"};
+        tableModel = new DefaultTableModel(columns, 0);
+        courseTable = new JTable(tableModel);
+        centerPanel.add(new JScrollPane(courseTable), BorderLayout.CENTER);
+        add(centerPanel, BorderLayout.CENTER);
+
+        JPanel bottomPanel = new JPanel();
+        JButton calcGPAButton = new JButton("Calculate GPA");
+        calcGPAButton.addActionListener(e -> calculateGPA());
+        bottomPanel.add(calcGPAButton);
+
+        JButton clearAllButton = new JButton("Clear All Students");
+        clearAllButton.addActionListener(e -> clearAllStudents());
+        bottomPanel.add(clearAllButton);
+
+        JButton exportButton = new JButton("Save Student File (Password)");
+        exportButton.addActionListener(e -> exportToCSV());
+        bottomPanel.add(exportButton);
+
+        add(bottomPanel, BorderLayout.SOUTH);
+
+        JPanel filePanel = new JPanel(new BorderLayout());
+        filePanel.setBorder(BorderFactory.createTitledBorder("Saved Files"));
+
+        fileListModel = new DefaultListModel<>();
+        JList<String> fileList = new JList<>(fileListModel);
+        loadSavedFiles();
+        filePanel.add(new JScrollPane(fileList), BorderLayout.CENTER);
+
+        JButton openFileButton = new JButton("Open File");
+        openFileButton.addActionListener(e -> openSelectedFile(fileList.getSelectedValue()));
+        filePanel.add(openFileButton, BorderLayout.SOUTH);
+
+        add(filePanel, BorderLayout.EAST);
+
+        setLocationRelativeTo(null);
+        setVisible(true);
+    }
+
+    private void showError(String msg) { JOptionPane.showMessageDialog(this, msg); }
+
+    private void addStudent() {
+        String name = studentNameField.getText().trim();
+        String srn = srnField.getText().trim();
+        if (!NAME_PATTERN.matcher(name).matches() || !SRN_PATTERN.matcher(srn).matches()) { showError("Invalid Name or SRN"); return; }
+        if (studentCourses.containsKey(srn)) { showError("Student already exists!"); return; }
+        studentCourses.put(srn, new Student(name, srn));
+        studentSelector.addItem(srn + " - " + name);
+        studentSelector.setSelectedItem(srn + " - " + name);
+    }
+
+    private void addCourse() {
+        if (studentSelector.getSelectedItem().equals("None")) { showError("Select student!"); return; }
+        String srn = studentSelector.getSelectedItem().toString().split(" - ")[0];
+        Student s = studentCourses.get(srn);
+        try {
+            s.courses.add(new Course(courseNameField.getText().trim(), Integer.parseInt(creditsField.getText().trim()), gradeField.getText().toUpperCase()));
+        } catch (Exception e) { showError("Invalid Input"); return; }
+        updateTable();
+    }
+
+    private void updateTable() {
+        tableModel.setRowCount(0);
+        if (studentSelector.getSelectedItem().equals("None")) return;
+        String srn = studentSelector.getSelectedItem().toString().split(" - ")[0];
+        Student s = studentCourses.get(srn);
+        for (Course c : s.courses)
+            tableModel.addRow(new Object[]{s.name, c.name, c.credits, c.grade});
+    }
+
+    private void clearCourses() {
+        if (studentSelector.getSelectedItem().equals("None")) { showError("Select a student first!"); return; }
+        String srn = studentSelector.getSelectedItem().toString().split(" - ")[0];
+        studentCourses.get(srn).courses.clear();
+        tableModel.setRowCount(0);
+    }
+
+    private void clearAllStudents() {
+        studentCourses.clear();
+        studentSelector.removeAllItems();
+        studentSelector.addItem("None");
+        tableModel.setRowCount(0);
+    }
+
+    private void calculateGPA() {
+        if (studentSelector.getSelectedItem().equals("None")) return;
+        String srn = studentSelector.getSelectedItem().toString().split(" - ")[0];
+        Student s = studentCourses.get(srn);
+        double points = 0; int credits = 0;
+        for (Course c : s.courses) { points += GRADE_POINTS.get(c.grade) * c.credits; credits += c.credits; }
+        JOptionPane.showMessageDialog(this, "GPA = " + GPA_FORMAT.format(points / credits));
+    }
+
+    private void exportToCSV() {
+        if (studentSelector.getSelectedItem().equals("None")) { showError("Select student!"); return; }
+        String srn = studentSelector.getSelectedItem().toString().split(" - ")[0];
+        Student s = studentCourses.get(srn);
+        String password = JOptionPane.showInputDialog(this, "Set Password:");
+        if (password == null || password.trim().isEmpty()) return;
+        String fileName = s.name + "_" + s.srn + ".csv";
+        try (PrintWriter writer = new PrintWriter(new FileWriter(fileName))) {
+            writer.println("SRN,Name,Course,Credits,Grade");
+            for (Course c : s.courses)
+                writer.println(s.srn + "," + s.name + "," + c.name + "," + c.credits + "," + c.grade);
+            savePassword(fileName, hashPassword(password));
+            if (!fileListModel.contains(fileName)) fileListModel.addElement(fileName);
+        } catch (Exception e) { showError("Error saving file!"); }
+    }
+
+    private void savePassword(String fileName, String hashedPass) throws IOException {
+        File f = new File("passwords.dat");
+        if (!f.exists()) f.createNewFile();
+        try (PrintWriter pw = new PrintWriter(new FileWriter(f, true))) {
+            pw.println(fileName + "," + hashedPass);
+        }
+    }
+
+    private void loadSavedFiles() {
+        File dir = new File(".");
+        for (File f : dir.listFiles())
+            if (f.getName().endsWith(".csv"))
+                fileListModel.addElement(f.getName());
+    }
+
+    private void openSelectedFile(String fileName) {
+        if (fileName == null) { showError("Select a file!"); return; }
+        String pwd = JOptionPane.showInputDialog(this, "Enter Password:");
+        if (pwd == null) return;
+        if (!verifyPassword(fileName, hashPassword(pwd))) { showError("Incorrect Password!"); return; }
+        tableModel.setRowCount(0);
+        try {
+            List<String> rows = Files.readAllLines(Paths.get(fileName));
+            rows.remove(0);
+            for (String r : rows) {
+                String[] cols = r.split(",");
+                tableModel.addRow(new Object[]{cols[1], cols[2], cols[3], cols[4]});
+            }
+        } catch (Exception e) { showError("Could not load file"); }
+    }
+
+    private boolean verifyPassword(String fileName, String hash) {
+        try (BufferedReader br = new BufferedReader(new FileReader("passwords.dat"))) {
+            String ln;
+            while ((ln = br.readLine()) != null) {
+                String[] a = ln.split(",");
+                if (a.length == 2 && a[0].equals(fileName) && a[1].equals(hash)) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private String hashPassword(String password) {
+        try { return Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(password.getBytes())); }
+        catch (Exception e) { return password; }
+    }
+
+    private static class Student {
+        String name, srn;
+        ArrayList<Course> courses = new ArrayList<>();
+        Student(String n, String s) { name = n; srn = s; }
+    }
+
+    private static class Course {
+        String name, grade; int credits;
+        Course(String n, int c, String g) { name = n; credits = c; grade = g; }
+    }
+
+    public static void main(String[] args) { SwingUtilities.invokeLater(kushan::new); }
+}
